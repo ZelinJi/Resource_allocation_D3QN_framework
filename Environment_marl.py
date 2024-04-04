@@ -307,12 +307,9 @@ class Environ:
             else:
                 real_power[index] = float("-inf")
         for i in range(self.n_RB):
-            indexes = np.argwhere(coefficient == i)
-            if (len(indexes) != 0):
-                for j in range(len(indexes)):
-                    C_Interference[coefficient[i][j]] += 10 ** ((real_power[indexes[j, 0]] -
-                                                                 self.D_to_BS_channels_abs[indexes[j, 0]]) / 10)
-                    break
+            for j in range (self.n_neighbor):
+                C_Interference[coefficient[i][j]] += 10 ** ((real_power[i] - self.D_to_BS_channels_abs[i] + self.vehAntGain + self.bsAntGain - self.bsNoiseFigure) / 10)
+                
         self.C_Interference = C_Interference + self.sig2
         C_Signals = 10 ** ((self.C_power_dB - self.C_channels_abs) / 10)
         C_Rate = np.log2(1 + np.divide(C_Signals, self.C_Interference))
