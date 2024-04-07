@@ -308,8 +308,7 @@ class Environ:
                 real_power[index] = float("-inf")
         for i in range(self.n_RB):
             for j in range (self.n_neighbor):
-                C_Interference[coefficient[i][j]] += 10 ** ((real_power[i] - self.D_to_BS_channels_abs[i] + self.vehAntGain + self.bsAntGain - self.bsNoiseFigure) / 10)
-                
+                C_Interference[coefficient[i][j]] += 10 ** ((real_power[i] - self.D_to_BS_channels_abs[i]) / 10)
         self.C_Interference = C_Interference + self.sig2
         C_Signals = 10 ** ((self.C_power_dB - self.C_channels_abs) / 10)
         C_Rate = np.log2(1 + np.divide(C_Signals, self.C_Interference))
@@ -321,23 +320,24 @@ class Environ:
         for i in range(self.n_RB):  # scanning all bands
             indexes = np.argwhere(coefficient == i)  # find spectrum-sharing D2Ds
             if (len(indexes) != 0):
-                receiver_j = self.D2D_users[indexes[j, 0]].destinations[indexes[j, 1]]
-                D_Signal[indexes[j, 0], indexes[j, 1]] = 10 ** ((real_power[indexes[j, 0]] -
-                                                                 self.D_channels_with_fastfading[
-                                                                     indexes[j][0], receiver_j, i]) / 10)
-                # Cellular links interference to D2D links
-                D_Interference[indexes[j, 0], indexes[j, 1]] = 10 ** (
-                            (self.C_power_dB - self.C_to_D_channels_abs[i, receiver_j]) / 10)
+                for j in range (len(indexes)):
+                    receiver_j = self.D2D_users[indexes[j, 0]].destinations[indexes[j, 1]]
+                    D_Signal[indexes[j, 0], indexes[j, 1]] = 10 ** ((real_power[indexes[j, 0]] -
+                                                                     self.D_channels_with_fastfading[
+                                                                         indexes[j][0], receiver_j, i]) / 10)
+                    # Cellular links interference to D2D links
+                    D_Interference[indexes[j, 0], indexes[j, 1]] = 10 ** (
+                                (self.C_power_dB - self.C_to_D_channels_abs[i, receiver_j]) / 10)
 
-                #  D2D interference
-                for k in range(j + 1, len(indexes)):  # spectrum-sharing D2Ds
-                    receiver_k = self.D2D_users[indexes[k][0]].destinations[indexes[k][1]]
-                    D_Interference[indexes[j, 0], indexes[j, 1]] += 10 ** (
-                                (real_power[indexes[k, 0]]
-                                 - self.D_channels_with_fastfading[indexes[k][0]][receiver_j][i]) / 10)
-                    D_Interference[indexes[k, 0], indexes[k, 1]] += 10 ** (
-                                (real_power[indexes[j, 0]]
-                                 - self.D_channels_with_fastfading[indexes[j][0]][receiver_k][i]) / 10)
+                    #  D2D interference
+                    for k in range(j + 1, len(indexes)):  # spectrum-sharing D2Ds
+                        receiver_k = self.D2D_users[indexes[k][0]].destinations[indexes[k][1]]
+                        D_Interference[indexes[j, 0], indexes[j, 1]] += 10 ** (
+                                    (real_power[indexes[k, 0]]
+                                     - self.D_channels_with_fastfading[indexes[k][0]][receiver_j][i]) / 10)
+                        D_Interference[indexes[k, 0], indexes[k, 1]] += 10 ** (
+                                    (real_power[indexes[j, 0]]
+                                     - self.D_channels_with_fastfading[indexes[j][0]][receiver_k][i]) / 10)
         self.D_Interference = D_Interference + self.sig2
         D_Rate = np.log2(1 + np.divide(D_Signal, self.D_Interference))
         return C_Rate, D_Rate
@@ -355,7 +355,7 @@ class Environ:
             for k in range(len(self.D2D_users)):
                 for m in range(len(channel_selection[k, :])):
                     D2D_Interference[k, m, i] += 10 ** ((self.C_power_dB - self.D_channels_with_fastfading[i][
-                        self.D2D_users[k].destinations[m]][i] + 2 * self.vehAntGain - self.vehNoiseFigure) / 10)
+                        self.D2D_users[k].destinations[m]][i]) / 10)
 
         # interference from peer D2D links
         for i in range(len(self.D2D_users)):
@@ -367,7 +367,7 @@ class Environ:
                         D2D_Interference[k, m, channel_selection[i, j]] += 10 ** (
                                     (self.D_power_dB_List[power_selection[i, j]]
                                      - self.D_channels_with_fastfading[i][self.D2D_users[k].destinations[m]][
-                                         channel_selection[i, j]] + 2 * self.vehAntGain - self.vehNoiseFigure) / 10)
+                                         channel_selection[i, j]]) / 10)
         self.D2D_Interference_all = 10 * np.log10(D2D_Interference)
 
     def act_for_training(self, actions):
