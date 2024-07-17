@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Jul 20 17:05:33 2020
+
+@author: jizelin
+"""
+
 from __future__ import division, print_function
 import random
 import scipy
@@ -17,18 +24,18 @@ import sys
 my_config = tf.ConfigProto()
 my_config.gpu_options.allow_growth=True
 
-def get_state(env, idx=(0, 0), ind_episode=1., epsi=0.02):
+def get_state(env, idx=(0,0), ind_episode=1., epsi=0.02):
     """ Get state from the environment """
-    C_fast = (env.C_channels_with_fastfading[idx[0], :] - env.C_channels_abs[idx[0]] + 10) / 35
 
-    D_fast = (env.D_channels_with_fastfading[:, env.D2D_users[idx[0]].destinations[idx[1]], :] - env.D_channels_abs[
-                                                                                                 :, env.D2D_users[idx[0]].destinations[idx[1]]] + 10) / 35
-    D_interference = (-env.D2D_Interference_all[idx[0], idx[1], :] - 60) / 60
+    C_PL = (env.C_pathloss[idx[0]] - 80) / 60.0
+    D_PL = (env.D_pathloss[:, env.D2D_users[idx[0]].destinations[idx[1]]] - 80)/60.0
 
-    C_abs = (env.C_channels_abs[idx[0]] - 80) / 60.0
-    D_abs = (env.D_channels_abs[:, env.D2D_users[idx[0]].destinations[idx[1]]] - 80) / 60.0
-    return np.concatenate((np.reshape(C_fast, -1), np.reshape(D_fast, -1), D_interference, np.reshape(C_abs, -1),
-                           D_abs, np.asarray([ind_episode, epsi])))
+    C_to_D_PL = (env.C_to_D_pathloss[idx[0], :] - 80) / 60
+    D_to_BS_PL = (env.D_to_BS_pathloss[idx[0]] - 80) / 60
+
+    D_interference = (-env.D2D_Interference_all[idx[0], :] - 60) / 60
+
+    return np.concatenate((np.reshape(C_PL, -1), np.reshape(D_PL, -1), np.reshape(C_to_D_PL, -1), np.reshape(D_to_BS_PL, -1), D_interference, np.asarray([ind_episode, epsi])))
 
 
 class Agent(object):
@@ -41,7 +48,7 @@ class Agent(object):
 #settings
 
 class Model:
-    def __init__(self, BS_center, cuser_center, duser_center, p_k_dB, p_t_dB_List, label):
+    def __init__(self, BS_center, cuser_center, duser_center, p_k_dB, p_t_dB_List, label, n_elements):
         self.epsi_final = 0.02
         self.BS_center = BS_center
         self.cuser_center = cuser_center
@@ -52,13 +59,13 @@ class Model:
         self.n_RB = len(cuser_center)
         self.n_neighbor = 1
         self.label = label
-        self.environment = Training(self.BS_center, self.cuser_center, self.duser_center, p_k_dB, p_t_dB_List)
+        self.environment = Training(self.BS_center, self.cuser_center, self.duser_center, p_k_dB, p_t_dB_List, n_elements)
 
     def build_net(self):
         n_hidden_1 = 500
         n_hidden_2 = 250
         n_hidden_3 = 120
-        n_input = 31 #len(get_state(self.environment))
+        n_input = 16 #len(get_state(self.environment))
         n_output = 36 #n_RB * len(env.D_power_dB_List)
 
         self.g = tf.Graph()
@@ -136,46 +143,46 @@ class Model:
         saver.restore(sess, model_path)
 
 
-    def load_saved_models(self):
+    def load_saved_models(self, agent_index):
         """ Restore all models """
         self.x, self.g_q_action, saver, init = self.build_net()
         # --------------------------------------------------------------
         agents = []
         self.sesses = []
-        for ind_agent in range(4):  # initialize agents
+        for ind_agent in range(len(agent_index)):  # initialize agents
             print("Initializing agent", ind_agent)
-            agent = Agent(memory_entry_size = 31)#len(get_state(self.environment)))
+            agent = Agent(memory_entry_size = 16)#len(get_state(self.environment)))
             agents.append(agent)
+
             sess = tf.Session(graph=self.g,config=my_config)
             sess.run(init)
             self.sesses.append(sess)
         print("\nRestoring the model...")
-        
-        for i in range(self.n_D2D):
-            for j in range(self.n_neighbor):
-                model_path = self.label + '/agent_' + str(i *self. n_neighbor + j)
-                self.load_models(self.sesses[i * self.n_neighbor + j], model_path, saver)
 
-    def get_resource_allocation(self, observation, BS_center, cuser_center, duser_center, p_k_dB, p_t_dB_List, action, n_elements):
+        for i in range(self.n_D2D):
+            if i in agent_index:
+                model_path = self.label + '/agent_' + str(agent_index[i])
+                self.load_models(self.sesses[agent_index[i]], model_path, saver)
+
+    def get_resource_allocation(self, observation, BS_center, cuser_center, duser_center, p_k_dB, p_t_dB_List, action, n_elements, agent_index):
         """Aquire the resource allocation policy"""
-        train = Training(self.BS_center, self.cuser_center, self.duser_center, self.p_k_dB, self.p_t_dB_List)
+        train = Training(self.BS_center, self.cuser_center, self.duser_center, self.p_k_dB, self.p_t_dB_List, n_elements)
         action_temp = action
         next_coords = [observation[0] * (100), observation[1] * (100)]
 
 
-        RIS_next_coords, theta, next_theta_number = train.get_next_state(observation, action_temp, next_coords)
-        self.environment.overall_channel(RIS_next_coords, theta, n_elements)
-        self.environment.renew_channels_fastfading()
+        RIS_next_coords, theta, next_theta_number = train.get_next_state(observation, action_temp, next_coords, n_elements)
+        self.environment.overall_channel(RIS_next_coords, theta)
 
-        action_all_testing = np.zeros([len(duser_center), 1, 2], dtype='int32')
-        resource_allocation_action = np.zeros(len(duser_center))
-        n_resource_allocation_action = (self.n_RB * len(self.p_t_dB_List))
+        action_all_testing = np.zeros([len(agent_index), 1, 2], dtype='int32')
+        resource_allocation_action = np.zeros(len(agent_index))
+        # n_resource_allocation_action = (self.n_RB * len(self.p_t_dB_List))
 
         for i in range(len(self.duser_center)):
-            for j in range(self.n_neighbor):
-                state_old = get_state(self.environment, [i, j], 1, self.epsi_final)
-                resource_allocation_action[i] = self.predict(self.sesses[i*self.n_neighbor+j], state_old, self.x, self.g_q_action)
-                action_all_testing[i, j, 0] = resource_allocation_action[i] % self.n_RB  # chosen RB
-                action_all_testing[i, j, 1] = int(np.floor(resource_allocation_action[i] / self.n_RB))  # power level
+            if i in agent_index.keys():
+                state_old = get_state(self.environment, [i, 0], 1, self.epsi_final)
+                resource_allocation_action[agent_index[i]] = self.predict(self.sesses[agent_index[i]], state_old, self.x, self.g_q_action)
+                action_all_testing[agent_index[i], 0, 0] = resource_allocation_action[agent_index[i]] % self.n_RB  # chosen RB
+                action_all_testing[agent_index[i], 0, 1] = int(np.floor(resource_allocation_action[agent_index[i]] / self.n_RB))  # power level
 
         return resource_allocation_action
