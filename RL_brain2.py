@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Mon Dec 16 11:01:49 2019
+
+@author: zj303
+"""
+
 import numpy as np
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -61,9 +69,9 @@ class DeepQNetwork:
         self.q_target = tf.placeholder(tf.float32, [None, self.n_actions], name='Q_target')  # for calculating loss
 
         # -----------------------------------------------------------
-        n_hidden_1 = 500
-        n_hidden_2 = 250
-        n_hidden_3 = 500
+        n_hidden_1 = 256
+        n_hidden_2 = 128
+        n_hidden_3 = 256
         n_input = self.n_features
         n_output = self.n_actions
 
@@ -174,8 +182,9 @@ class DeepQNetwork:
             q_t_plus_1 = self.sess.run(self.target_q_with_idx, {self.s_: batch_memory[:, self.n_features + 2: 2 * self.n_features + 2],
                                                               self.g_target_q_idx: [[idx, pred_a] for idx, pred_a in
                                                                                enumerate(pred_action)]})
-            max_act4next = np.argmax(q_eval4next, axis=1)        # choose the action evaluated by q_eval network
-            selected_q_next = q_next[batch_index, max_act4next]  # Double DQN calculate q_next according to the action chosen by q_eval
+            # max_act4next = np.argmax(q_eval4next, axis=1)        # choose the action evaluated by q_eval network
+            # selected_q_next = q_next[batch_index, max_act4next]  # Double DQN calculate q_next according to the action chosen by q_eval
+            selected_q_next = q_t_plus_1
         else:       # Natural DQN
             selected_q_next = np.max(q_next, axis=1)    # May lead to overestimate issue
 
