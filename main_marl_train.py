@@ -12,8 +12,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
 my_config = tf.ConfigProto()
 my_config.gpu_options.allow_growth = True
-IS_double_q = True
-sigma = 0.0001
+IS_double_q = False
+# sigma = 0.0001
 
 
 class Agent(object):
@@ -26,6 +26,13 @@ class Agent(object):
 
 # ################## SETTINGS ######################
 
+# width = 500
+# height = 500
+#
+# duser_center = np.array([[225,25], [250,100], [50,400], [100,450]])
+# cuser_center = np.array([[125,150], [475,325], [250,425], [375,150]])
+# BS_center = [250, 250]
+
 width = 100
 height = 100
 
@@ -35,7 +42,6 @@ BS_center = [50, 50]
 
 IS_TRAIN = True
 
-
 if IS_double_q:
     label = 'marl_model_double'
 else:
@@ -44,6 +50,7 @@ else:
 n_veh = 4
 n_neighbor = 1
 n_RB = n_veh
+n_pairs = int(n_veh / (n_neighbor + 1))
 
 C_power_dB = 23  # dBm
 D_power_dB_List = [24, 21, 18, 15, 12, 9, 6, 3, 0]  # the power levels
@@ -51,7 +58,7 @@ D_power_dB_List = [24, 21, 18, 15, 12, 9, 6, 3, 0]  # the power levels
 env = Environment_marl.Environ(BS_center, cuser_center, duser_center, C_power_dB, D_power_dB_List) # initialize parameters in env
 # env.new_random_game()
 
-n_episode = 5000
+n_episode = 1000
 n_step_per_episode = int(env.time_slow/env.time_fast)
 epsi_final = 0.02
 epsi_anneal_length = int(0.9*n_episode)
@@ -66,15 +73,15 @@ n_episode_test = 100  # test episodes
 def get_state(env, idx=(0,0), ind_episode=1., epsi=0.02):
     """ Get state from the environment """
 
-    C_fast = (env.C_channels_with_fastfading[idx[0], :] - env.C_channels_abs[idx[0]] + 10)/35
+    C_PL = (env.C_pathloss[idx[0]] - 80) / 60.0
+    D_PL = (env.D_pathloss[:, env.D2D_users[idx[0]].destinations[0]] - 80)/60.0
 
-    D_fast = (env.D_channels_with_fastfading[:, env.D2D_users[idx[0]].destinations[idx[1]], :] - env.D_channels_abs[:, env.D2D_users[idx[0]].destinations[idx[1]]] + 10)/35
-    D_interference = (-env.D2D_Interference_all[idx[0], idx[1], :] - 60) / 60
+    C_to_D_PL = (env.C_to_D_pathloss[idx[0], :] - 80) / 60
+    D_to_BS_PL = (env.D_to_BS_pathloss[idx[0]] - 80) / 60
 
-    C_abs = (env.C_channels_abs[idx[0]] - 80) / 60.0
-    D_abs = (env.D_channels_abs[:, env.D2D_users[idx[0]].destinations[idx[1]]] - 80)/60.0
+    D_interference = (-env.D2D_Interference_all[idx[0], :] - 60) / 60
 
-    return np.concatenate((np.reshape(C_fast, -1), np.reshape(D_fast, -1), D_interference, np.reshape(C_abs, -1), D_abs, np.asarray([ind_episode, epsi])))
+    return np.concatenate((np.reshape(C_PL, -1), np.reshape(D_PL, -1), np.reshape(C_to_D_PL, -1), np.reshape(D_to_BS_PL, -1), D_interference, np.asarray([ind_episode, epsi])))
 
 # -----------------------------------------------------------
 n_hidden_1 = 500
@@ -116,7 +123,7 @@ with g.as_default():
 
     g_loss = tf.reduce_mean(tf.square(g_target_q_t - q_acted), name='g_loss')
     # to update
-    optim = tf.train.AdamOptimizer(learning_rate=0.0005).minimize(g_loss)
+    optim = tf.train.AdamOptimizer(learning_rate=0.001).minimize(g_loss)
     # ==================== Prediction network ========================
     x_p = tf.placeholder(tf.float32, [None, n_input])
 
@@ -218,7 +225,7 @@ def print_weight(sess, target=False):
 # --------------------------------------------------------------
 agents = []
 sesses = []
-for ind_agent in range(n_veh * n_neighbor):  # initialize agents
+for ind_agent in range(n_pairs):  # initialize agents
     print("Initializing agent", ind_agent)
     agent = Agent(memory_entry_size=len(get_state(env)))
     agents.append(agent)
@@ -226,8 +233,6 @@ for ind_agent in range(n_veh * n_neighbor):  # initialize agents
     sess = tf.Session(graph=g,config=my_config)
     sess.run(init)
     sesses.append(sess)
-
-
 
 # ------------------------- Training -----------------------------
 record_reward = np.zeros([n_episode*n_step_per_episode, 1])
@@ -239,76 +244,94 @@ if IS_TRAIN:
     for i_episode in range(n_episode):
         print("-------------------------")
         if i_episode < epsi_anneal_length:
+            # epsi = 1 - np.log(i_episode * (1 - epsi_final)) / np.log(epsi_anneal_length - 1)  # epsilon decreases over each episode
             epsi = 1 - (i_episode * (1 - epsi_final)) / (epsi_anneal_length - 1)  # epsilon decreases over each episode
         else:
+            # epsi = 1 - np.log(epsi_anneal_length * (1 - epsi_final)) / np.log(epsi_anneal_length - 1)
             epsi = 1 - (epsi_anneal_length * (1 - epsi_final)) / (epsi_anneal_length - 1)
+
         print('Episode:', i_episode, 'Epsi', epsi)
-        if i_episode%100 == 0:
+        if i_episode % 100 == 0:
             env.renew_neighbor()
             env.random_RIS_implement()
             env.overall_channel() # update channel slow fading
-            env.renew_channels_fastfading() # update channel fast fading
+
+        is_agent = [True] * n_veh
+        agent_index = {}
+        idx_agent = 0
+        for i in range(n_veh):
+            if is_agent[i] == True:
+                agent_index[i] = idx_agent
+                idx_agent += 1
+                for j in env.D2D_users[i].destinations:
+                    is_agent[j] = False
 
         cumulative_reward = 0
-        cumulative_rate = np.zeros([n_veh, 1])
+        cumulative_rate = np.zeros([n_pairs, 1])
         step_rate = []
         for i_step in range(n_step_per_episode):
             time_step = i_episode*n_step_per_episode + i_step
             state_old_all = []
             action_all = []
-            action_all_training = np.zeros([n_veh, n_neighbor, 2], dtype='int32')
+            action_all_training = np.zeros([n_pairs, n_neighbor, 2], dtype='int32')
             for i in range(n_veh):
-                for j in range(n_neighbor):
-                    state = get_state(env, [i, j], i_episode/(n_episode-1), epsi)
-                    state_old_all.append(state)
-                    action = predict(sesses[i*n_neighbor+j], state, epsi)
-                    action_all.append(action)
+                if is_agent[i] == True:
+                    for j in range(n_neighbor):
+                        #####################################################################################################   3.27
+                        state = get_state(env, [i, j], i_episode/(n_episode-1), epsi)
+                        state_old_all.append(state)
+                        action = predict(sesses[agent_index[i]], state, epsi)
+                        action_all.append(action)
 
-                    action_all_training[i, j, 0] = action % n_RB  # chosen RB
-                    action_all_training[i, j, 1] = int(np.floor(action / n_RB)) # power level
+                        action_all_training[agent_index[i], j, 0] = action % n_RB  # chosen RB
+                        action_all_training[agent_index[i], j, 1] = int(np.floor(action / n_RB)) # power level
+                else:
+                    state_old_all.append(0)
+                    action_all.append(0)
 
             # All agents take actions simultaneously, obtain shared reward, and update the environment.
             action_temp = action_all_training.copy()
-            train_reward = env.act_for_training(action_temp)
-            C_rate, D_rate, _ = env.act_for_testing(action_temp)
+            train_reward = env.act_for_training(agent_index, action_temp)
+            C_rate, D_rate, _ = env.act_for_testing(agent_index, action_temp)
             V2V_success = 1
             record_reward[time_step] = train_reward
-            
+
             cumulative_reward += train_reward
-            average_reward = cumulative_reward / (i_step+1)
-            step_rate.append(sum(C_rate)+sum(D_rate))
-            cumulative_rate = sum(step_rate) / (i_step+1)
+            # step_rate.append(sum(C_rate)+sum(D_rate))
+            # cumulative_rate = sum(step_rate) / (i_step+1)
 
             env.random_RIS_implement()
-            env.overall_channel()  # update channel slow fading
-            env.renew_channels_fastfading()  # update channel fast fading
-            env.Compute_Interference(action_temp)
+            env.overall_channel()  # update channel
+            env.Compute_Interference(agent_index, action_temp)
 
             for i in range(n_veh):
-                for j in range(n_neighbor):
-                    state_old = state_old_all[n_neighbor * i + j]
-                    action = action_all[n_neighbor * i + j]
-                    state_new = get_state(env, [i, j], i_episode/(n_episode-1), epsi)
-                    agents[i * n_neighbor + j].memory.add(state_old, state_new, train_reward, action)  # add entry to this agent's memory
+                if is_agent[i] == True:
+                    for j in range(n_neighbor):
+                        state_old = state_old_all[n_neighbor * i + j]
+                        action = action_all[n_neighbor * i + j]
+                        state_new = get_state(env, [i, j], i_episode/(n_episode-1), epsi)
+                        agents[agent_index[i]].memory.add(state_old, state_new, train_reward, action)  # add entry to this agent's memory
 
-                    # training this agent
-                    if time_step % mini_batch_step == mini_batch_step-1:
-                        loss_val_batch = q_learning_mini_batch(agents[i*n_neighbor+j], sesses[i*n_neighbor+j])
-                        record_loss.append(loss_val_batch)
-                        if i == 0 and j == 0:
-                            print('step:', time_step, 'agent',i*n_neighbor+j, 'loss', sum(record_loss[-4:]))
-                    if time_step % target_update_step == target_update_step-1:
-                        update_target_q_network(sesses[i*n_neighbor+j])
-                        if i == 0 and j == 0:
-                            print('Update target Q network...')
-                            print('reward', average_reward)
-                            average_return.append(average_reward)
-                            average_rate.append(cumulative_rate)
+                        # training this agent
+                        if time_step % mini_batch_step == mini_batch_step-1:
+                            loss_val_batch = q_learning_mini_batch(agents[agent_index[i]], sesses[agent_index[i]])
+                            record_loss.append(loss_val_batch)
+                            if i == 0 and j == 0:
+                                # print('C_rate: ', C_rate, 'D_rate: ', D_rate)
+                                print('step:', time_step, 'agent',agent_index[i], 'loss', sum(record_loss[-4:]))
+                        if time_step % target_update_step == target_update_step-1:
+                            update_target_q_network(sesses[agent_index[i]])
+                            if i == 0 and j == 0:
+                                average_reward = cumulative_reward / (i_step + 1)
+                                print('Update target Q network...')
+                                print('reward', average_reward)
+                                average_return.append(average_reward)
+                                # average_rate.append(cumulative_rate)
     print('Training Done. Saving models...')
     for i in range(n_veh):
-        for j in range(n_neighbor):
-            model_path = label + '/agent_' + str(i * n_neighbor + j)
-            save_models(sesses[i * n_neighbor + j], model_path)
+        if i in agent_index:
+            model_path = label + '/agent_' + str(agent_index[i])
+            save_models(sesses[agent_index[i]], model_path)
 
     current_dir = os.path.dirname(os.path.realpath(__file__))
     reward_path = os.path.join(current_dir, "model/" + label + '/reward.mat')
@@ -319,6 +342,14 @@ if IS_TRAIN:
     loss_path = os.path.join(current_dir, "model/" + label + '/train_loss.mat')
     scipy.io.savemat(loss_path, {'train_loss': record_loss})
 
+    if IS_double_q:
+            np.savetxt('Loss_MARL_double', record_loss)
+            np.savetxt('Reward_MARL_double', average_return)
+            np.savetxt('Rate_MARL_double', average_rate)
+    else:
+            np.savetxt('Loss_MARL', record_loss)
+            np.savetxt('Reward_MARL', average_return)
+            np.savetxt('Rate_MARL', average_rate)
 
 # close sessions
 for sess in sesses:
